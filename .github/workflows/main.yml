@@ -1,216 +1,64 @@
-name: ADF CI/CD
-
 on:
   push:
     branches:
-      - main
-
+    - main
 permissions:
-  id-token: write
-  contents: read
-
-env:
-  # ---- DEV (source of the ARM template) ----
-  # FIXED: was 7bfccce01 (9 chars, invalid GUID). Correct value has 8: 7bfcce01
-  DEV_SUBSCRIPTION_ID: 7bfcce01-6970-4984-aa6a-d21aa8b40966
-  DEV_RESOURCE_GROUP: rg_dev2026v1
-  DEV_DATA_FACTORY: adfdev2026v1
-
-  # ---- Root folder that contains pipeline/, dataset/, linkedService/ ----
-  # Must match the "Root folder" value in ADF Studio > Manage > Git configuration.
-  # If Root folder is "/", leave this as github.workspace.
-  # If Root folder is e.g. "/adf", change to: ${{ github.workspace }}/adf
-  ADF_ROOT: ${{ github.workspace }}
-
-  # ---- PROD (deployment target) ----
-  PROD_RESOURCE_GROUP: rg_prod2026v1
-  PROD_DATA_FACTORY: addfprod2026v1
-
-
+      id-token: write
+      contents: read
 jobs:
-
-  # ==========================================================
-  # BUILD / VALIDATE / EXPORT
-  # ==========================================================
   build:
-    name: Validate and Export ADF
     runs-on: ubuntu-latest
-
     steps:
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22.x
-
-      # --------------------------------------------------------
-      # Fail fast with a clear message if the ADF JSON is absent.
-      # Without this, "validate" passes on an empty repo and the
-      # failure only surfaces later - or worse, an empty template
-      # reaches prod and the post-deployment cleanup deletes
-      # live prod resources.
-      # --------------------------------------------------------
-      - name: Fail fast if no ADF resources
-        run: |
-          echo "ADF_ROOT = ${{ env.ADF_ROOT }}"
-          echo ""
-          echo "Contents:"
-          ls -la "${{ env.ADF_ROOT }}"
-          echo ""
-
-          if [ ! -d "${{ env.ADF_ROOT }}/pipeline" ]; then
-            echo "=========================================================="
-            echo "ERROR: No 'pipeline' folder found under ADF_ROOT."
-            echo ""
-            echo "Likely causes:"
-            echo "  1. ADF Studio 'Save all' was never run on the"
-            echo "     collaboration branch, so no JSON was committed."
-            echo "  2. The dev factory's Git configuration points at a"
-            echo "     different repository or branch than this one."
-            echo "  3. ADF_ROOT does not match the ADF 'Root folder' setting."
-            echo "=========================================================="
-            exit 1
-          fi
-
-          echo "Pipelines found:"
-          ls -1 "${{ env.ADF_ROOT }}/pipeline"
-
-      - name: Install ADF Utilities
-        run: npm install
-        working-directory: ${{ github.workspace }}/build
-
-      - name: Validate ADF
-        run: |
-          npm run build validate \
-            "${{ env.ADF_ROOT }}" \
-            "/subscriptions/${{ env.DEV_SUBSCRIPTION_ID }}/resourceGroups/${{ env.DEV_RESOURCE_GROUP }}/providers/Microsoft.DataFactory/factories/${{ env.DEV_DATA_FACTORY }}"
-        working-directory: ${{ github.workspace }}/build
-
-      - name: Export ARM Template
-        run: |
-          rm -rf "${{ github.workspace }}/build/ExportedArmTemplate"
-
-          npm run build export \
-            "${{ env.ADF_ROOT }}" \
-            "/subscriptions/${{ env.DEV_SUBSCRIPTION_ID }}/resourceGroups/${{ env.DEV_RESOURCE_GROUP }}/providers/Microsoft.DataFactory/factories/${{ env.DEV_DATA_FACTORY }}" \
-            "ExportedArmTemplate"
-        working-directory: ${{ github.workspace }}/build
-
-      - name: Verify ARM template
-        run: |
-          echo "Generated ARM files:"
-          find "${{ github.workspace }}/build/ExportedArmTemplate" -type f -print
-
-          if [ ! -f "${{ github.workspace }}/build/ExportedArmTemplate/ARMTemplateForFactory.json" ]; then
-            echo "ERROR: ARMTemplateForFactory.json was not generated."
-            exit 1
-          fi
-
-          if [ ! -f "${{ github.workspace }}/build/ExportedArmTemplate/ARMTemplateParametersForFactory.json" ]; then
-            echo "ERROR: ARMTemplateParametersForFactory.json was not generated."
-            exit 1
-          fi
-
-          echo "ARM template validation successful."
-
-      # --------------------------------------------------------
-      # Print the parameter names. You need these to build the
-      # additionalParameters string in the release job.
-      # --------------------------------------------------------
-      - name: Show ARM template parameters
-        run: |
-          echo "Parameters expected by the template:"
-          cat "${{ github.workspace }}/build/ExportedArmTemplate/ARMTemplateParametersForFactory.json"
-
-      - name: Upload ARM template
-        uses: actions/upload-artifact@v4
-        with:
-          name: ExportedArmTemplate
-          path: ${{ github.workspace }}/build/ExportedArmTemplate
-          if-no-files-found: error
-
-
-  # ==========================================================
-  # RELEASE / DEPLOY TO PROD
-  # ==========================================================
+    - uses: actions/checkout@v3
+# Installs Node and the npm packages saved in your package.json file in the build
+    - name: Setup Node.js environment
+      uses: actions/setup-node@v3.4.1
+      with:
+        node-version: 18.x
+        
+    - name: install ADF Utilities package
+      run: npm install
+      working-directory: ${{github.workspace}}/build  # (1) provide the folder location of the package.json file
+        
+# Validates all of the Data Factory resources in the repository. You'll get the same validation errors as when "Validate All" is selected.
+    - name: Validate
+      run: npm run build validate ${{github.workspace}}/ /subscriptions/7bfcce01-6970-4984-aa6a-d21aa8b40966/resourceGroups/rg_dev2026v1/providers/Microsoft.DataFactory/factories/adfdev2026v1 # (2) The validate command needs the root folder location of your repository where all the objects are stored. And the 2nd parameter is the resourceID of the ADF instance 
+      working-directory: ${{github.workspace}}/build
+ 
+    - name: Validate and Generate ARM template
+      run: npm run build export ${{github.workspace}}/ /subscriptions/7bfcce01-6970-4984-aa6a-d21aa8b40966/resourceGroups/rg_dev2026v1/providers/Microsoft.DataFactory/factories/adfdev2026v1 "ExportedArmTemplate"  # (3) The build command, as validate, needs the root folder location of your repository where all the objects are stored. And the 2nd parameter is the resourceID of the ADF instance. The 3rd parameter is the exported ARM template artifact name 
+      working-directory: ${{github.workspace}}/build
+ 
+# In order to leverage the artifact in another job, we need to upload it with the upload action 
+    - name: upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ExportedArmTemplate # (4) use the same artifact name you used in the previous export step
+        path: ${{github.workspace}}/build/ExportedArmTemplate
   release:
-    name: Deploy ADF to Production
     needs: build
     runs-on: ubuntu-latest
-
-    # Gate prod behind a manual approval.
-    # NOTE: environment protection rules (required reviewers)
-    # need a PUBLIC repo on GitHub Free/Pro plans.
-    environment: production
-
     steps:
-
-      - name: Download ARM template
+    
+ # we 1st download the previously uploaded artifact so we can leverage it later in the release job     
+      - name: Download a Build Artifact
         uses: actions/download-artifact@v4
         with:
-          name: ExportedArmTemplate
-          path: ${{ github.workspace }}/ExportedArmTemplate
-
-      - name: Check downloaded ARM template
-        run: |
-          find "${{ github.workspace }}/ExportedArmTemplate" -type f -print
-
-          if [ ! -f "${{ github.workspace }}/ExportedArmTemplate/ARMTemplateForFactory.json" ]; then
-            echo "ERROR: ARMTemplateForFactory.json not found."
-            exit 1
-          fi
-
-          if [ ! -f "${{ github.workspace }}/ExportedArmTemplate/ARMTemplateParametersForFactory.json" ]; then
-            echo "ERROR: ARMTemplateParametersForFactory.json not found."
-            exit 1
-          fi
-
-      # --------------------------------------------------------
-      # enable-AzPSSession is REQUIRED.
-      # The deploy action's PrePostDeploymentScript.ps1 runs under
-      # pwsh and calls Az PowerShell cmdlets (Get-AzDataFactoryV2Trigger).
-      # azure/login without this flag authenticates Azure CLI only,
-      # which produces: "Run Connect-AzAccount to login."
-      # --------------------------------------------------------
-      - name: Login to Azure
-        uses: azure/login@v2
+          name: ExportedArmTemplate # (5) Artifact name
+      - name: Login via Az module
+        uses: azure/login@v1
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          enable-AzPSSession: true
-
-      # --------------------------------------------------------
-      # The action already: stops active triggers -> deploys ARM ->
-      # deletes removed resources -> restarts triggers.
-      # Do NOT add your own PrePostDeploymentScript.ps1 step.
-      #
-      # factoryName is injected automatically by the action from
-      # dataFactoryName - you do NOT need it in additionalParameters.
-      #
-      # Fill additionalParameters with the PROD values for every
-      # environment-specific parameter. Get the exact key names from
-      # the "Show ARM template parameters" step output in the build job.
-      # Without this, PROD ADF will point at DEV storage / SQL / Key Vault.
-      # --------------------------------------------------------
-      - name: Deploy ADF to Production
+          enable-AzPSSession: true 
+      - name: data-factory-deploy
         uses: Azure/data-factory-deploy-action@v1.2.0
         with:
-          resourceGroupName: ${{ env.PROD_RESOURCE_GROUP }}
-          dataFactoryName: ${{ env.PROD_DATA_FACTORY }}
-          armTemplateFile: ${{ github.workspace }}/ExportedArmTemplate/ARMTemplateForFactory.json
-          armTemplateParametersFile: ${{ github.workspace }}/ExportedArmTemplate/ARMTemplateParametersForFactory.json
-          # additionalParameters: 'ls_adls_properties_typeProperties_url=${{ vars.PROD_ADLS_URL }} ls_kv_properties_typeProperties_baseUrl=${{ vars.PROD_KV_URL }}'
-
-      - name: Deployment completed
-        run: |
-          echo "=========================================="
-          echo "ADF deployment completed"
-          echo "Resource Group : ${{ env.PROD_RESOURCE_GROUP }}"
-          echo "Data Factory   : ${{ env.PROD_DATA_FACTORY }}"
-          echo "=========================================="
-          echo "MANUAL CHECK: open PROD ADF > Manage > Triggers"
-          echo "and confirm previously-active triggers are RUNNING."
+          resourceGroupName: #TargetResourceGroup
+          dataFactoryName: #targetADF
+          armTemplateFile: ARMTemplateForFactory.json
+          armTemplateParametersFile: ARMTemplateParametersForFactory.json
+          #additionalParameters: # (10) Parameters which will be replaced in the ARM template. Expected format 'key1=value key2=value keyN=value'. At the minimum here you should provide the target ADF name parameter. Check the ARMTemplateParametersForFactory.json file for all the parameters that are expected in your scenario
+         
+          # skipAzModuleInstallation:  # Parameters which skip the Az module installation. Optional, default is false.    
